@@ -298,8 +298,14 @@ class METRO_PT_Actions(METRO_PT_Base, Panel):
         col = layout.column(align=True)
         col.scale_y = 1.3
 
+        # Primary action — export 3D file with metadata embedded
+        col.operator("metro.export_gltf", icon="EXPORT")
+
+        col.separator()
+
+        # Secondary actions
         col.operator("metro.inject_into_scene", icon="IMPORT")
-        col.operator("metro.export_sidecar", icon="EXPORT")
+        col.operator("metro.export_sidecar", icon="FILE_TEXT")
 
         col.separator()
 

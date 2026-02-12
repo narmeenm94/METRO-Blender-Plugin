@@ -8,9 +8,11 @@ Blender operators for METRO metadata actions:
 - Clear all metadata
 """
 
+import os
+
 import bpy
 from bpy.types import Operator
-from bpy.props import StringProperty
+from bpy.props import BoolProperty, EnumProperty, StringProperty
 
 from .extractor import extract_from_scene
 from .reader import read_from_active_object
@@ -190,6 +192,108 @@ class METRO_OT_GenerateLineageID(Operator):
 
 
 # ===================================================================
+# Export glTF/GLB with Metadata
+# ===================================================================
+
+class METRO_OT_ExportGLTF(Operator):
+    """Export scene as glTF/GLB with METRO metadata embedded in extras"""
+
+    bl_idname = "metro.export_gltf"
+    bl_label = "Export glTF with Metadata"
+    bl_description = (
+        "Inject metadata, then export the scene as glTF/GLB. "
+        "Metadata is embedded in the file's extras field"
+    )
+    bl_options = {"REGISTER"}
+
+    filepath: StringProperty(
+        name="File Path",
+        description="Export file path",
+        default="",
+        subtype="FILE_PATH",
+    )
+    export_format: EnumProperty(
+        name="Format",
+        description="glTF export format",
+        items=[
+            ("GLB", "GLB (.glb)", "Single binary file — recommended"),
+            ("GLTF_SEPARATE", "glTF (.gltf + .bin + textures)", "Separate files"),
+        ],
+        default="GLB",
+    )
+    export_selected: BoolProperty(
+        name="Selected Only",
+        description="Export only selected objects",
+        default=False,
+    )
+
+    def invoke(self, context, event):
+        scene = context.scene
+        core = scene.metro_core
+
+        # Pre-fill filename from asset name or blend file
+        if core.asset_name:
+            name = core.asset_name.replace(" ", "_")
+        elif bpy.data.filepath:
+            name = os.path.splitext(os.path.basename(bpy.data.filepath))[0]
+        else:
+            name = "untitled"
+
+        ext = ".glb" if self.export_format == "GLB" else ".gltf"
+
+        # Default to the same directory as the blend file
+        if bpy.data.filepath:
+            directory = os.path.dirname(bpy.data.filepath)
+            self.filepath = os.path.join(directory, name + ext)
+        else:
+            self.filepath = name + ext
+
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        scene = context.scene
+
+        # Validate metadata
+        errors = validate_metadata(scene)
+        if errors:
+            for field, msg in errors:
+                self.report({"WARNING"}, f"{field}: {msg}")
+            self.report({"ERROR"}, "Fix validation errors before exporting")
+            return {"CANCELLED"}
+
+        # Step 1: Inject metadata into scene custom properties
+        data = inject_into_scene(scene)
+        field_count = len([k for k in data.keys() if not k.startswith("_")])
+
+        # Ensure file extension matches format
+        filepath = self.filepath
+        if self.export_format == "GLB" and not filepath.lower().endswith(".glb"):
+            filepath = os.path.splitext(filepath)[0] + ".glb"
+        elif self.export_format == "GLTF_SEPARATE" and not filepath.lower().endswith(".gltf"):
+            filepath = os.path.splitext(filepath)[0] + ".gltf"
+
+        # Step 2: Export via Blender's built-in glTF exporter
+        try:
+            bpy.ops.export_scene.gltf(
+                filepath=filepath,
+                export_format=self.export_format,
+                use_selection=self.export_selected,
+                export_extras=True,  # Include custom properties as extras
+                export_apply=True,   # Apply modifiers
+            )
+        except Exception as e:
+            self.report({"ERROR"}, f"glTF export failed: {e}")
+            return {"CANCELLED"}
+
+        self.report(
+            {"INFO"},
+            f"Exported {os.path.basename(filepath)} with {field_count} metadata fields"
+        )
+        return {"FINISHED"}
+
+
+# ===================================================================
 # Clear All Metadata
 # ===================================================================
 
@@ -234,6 +338,7 @@ OPERATOR_CLASSES = [
     METRO_OT_InjectIntoScene,
     METRO_OT_ReadFromObject,
     METRO_OT_ExportSidecar,
+    METRO_OT_ExportGLTF,
     METRO_OT_GenerateLineageID,
     METRO_OT_ClearMetadata,
 ]
