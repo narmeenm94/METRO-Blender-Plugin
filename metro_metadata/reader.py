@@ -59,6 +59,7 @@ def read_from_active_object(scene):
 
 def _read_scene_metro_metadata(scene):
     """Read the structured metro_metadata dict from scene custom props."""
+    # Try structured IDProperties first
     if SCENE_METADATA_KEY in scene:
         raw = scene[SCENE_METADATA_KEY]
         # IDPropertyGroup -> dict
@@ -72,6 +73,17 @@ def _read_scene_metro_metadata(scene):
                 return json.loads(raw)
             except (json.JSONDecodeError, ValueError):
                 pass
+
+    # Fall back to JSON backup key
+    json_key = SCENE_METADATA_KEY + "_json"
+    if json_key in scene:
+        raw = scene[json_key]
+        if isinstance(raw, str):
+            try:
+                return json.loads(raw)
+            except (json.JSONDecodeError, ValueError):
+                pass
+
     return None
 
 

@@ -163,8 +163,18 @@ def collect_metadata(scene):
 
 def inject_into_scene(scene):
     """
-    Store the collected metadata as a scene custom property.
+    Store the collected metadata as scene custom properties.
     This persists in .blend files and exports via glTF extras.
+
+    Stores in two ways:
+    1. Structured IDProperties under "metro_metadata" — these export
+       as proper JSON objects in glTF extras (Blender handles flat
+       dicts and simple nested values natively).
+    2. A JSON string backup under "metro_metadata_json" for robustness
+       with deeply nested or complex values.
+
+    The glTF export hook (gltf_hooks.py) also writes the full structured
+    metadata, so the file always carries the data regardless of method.
 
     Args:
         scene: bpy.types.Scene
@@ -174,11 +184,76 @@ def inject_into_scene(scene):
     """
     data = collect_metadata(scene)
 
-    # Store as JSON string in scene custom property
-    # (IDProperties don't support nested dicts well, JSON string is safest)
-    scene[SCENE_METADATA_KEY] = json.dumps(data, indent=2, ensure_ascii=False)
+    # Store as structured IDProperties for glTF extras export.
+    # Blender IDProperties support dicts with simple types natively.
+    _set_idprop_recursive(scene, SCENE_METADATA_KEY, data)
+
+    # Also keep a JSON string backup for lossless round-tripping
+    scene[SCENE_METADATA_KEY + "_json"] = json.dumps(
+        data, indent=2, ensure_ascii=False
+    )
 
     return data
+
+
+def _set_idprop_recursive(owner, key, value):
+    """
+    Set a custom property on a Blender data-block, handling nested
+    dicts and lists so they become proper IDPropertyGroup/IDPropertyArray.
+
+    Blender 3.6+ supports nested IDProperties for dicts with simple values.
+    """
+    if isinstance(value, dict):
+        # For nested dicts, assign as a plain dict — Blender converts
+        # to IDPropertyGroup automatically in 3.6+.
+        # Filter out None values since IDProperties can't store None.
+        clean = {}
+        for k, v in value.items():
+            if v is None:
+                continue
+            if isinstance(v, dict):
+                # Flatten nested dicts to JSON strings if > 1 level deep
+                # to avoid IDProperty limitations
+                clean[k] = _simplify_for_idprop(v)
+            elif isinstance(v, list):
+                clean[k] = _simplify_for_idprop(v)
+            else:
+                clean[k] = v
+        owner[key] = clean
+    elif isinstance(value, list):
+        owner[key] = _simplify_for_idprop(value)
+    elif value is not None:
+        owner[key] = value
+
+
+def _simplify_for_idprop(value):
+    """
+    Simplify a value for IDProperty storage.
+    Dicts become plain dicts, complex nested structures become JSON strings.
+    """
+    if isinstance(value, dict):
+        # Check if all values are simple types
+        simple = {}
+        for k, v in value.items():
+            if v is None:
+                continue
+            if isinstance(v, (str, int, float, bool)):
+                simple[k] = v
+            elif isinstance(v, (dict, list)):
+                # Convert deeper nesting to JSON string
+                simple[k] = json.dumps(v, ensure_ascii=False)
+            else:
+                simple[k] = str(v)
+        return simple
+    elif isinstance(value, list):
+        # IDPropertyArray needs homogeneous types
+        if not value:
+            return []
+        if all(isinstance(v, (int, float)) for v in value):
+            return value
+        # Convert to list of strings for mixed types
+        return [str(v) if not isinstance(v, str) else v for v in value]
+    return value
 
 
 def export_sidecar_json(scene, filepath=None):
